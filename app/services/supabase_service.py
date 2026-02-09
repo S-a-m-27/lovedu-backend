@@ -204,13 +204,13 @@ class SupabaseService:
                 
                 # Create a temporary client for token verification with timeout configuration
                 verify_client = create_client(supabase_url, supabase_anon_key, options=client_options)
-            response = verify_client.auth.get_user(token)
-            
-            if response.user:
-                logger.info(f"✅ Token verified successfully for user: {response.user.email}")
-            else:
-                logger.warning("⚠️  Token verification returned no user")
-            return response
+                response = verify_client.auth.get_user(token)
+                
+                if response.user:
+                    logger.info(f"✅ Token verified successfully for user: {response.user.email}")
+                else:
+                    logger.warning("⚠️  Token verification returned no user")
+                return response
                 
             except (TimeoutError, ConnectionError, Exception) as e:
                 error_type = type(e).__name__
