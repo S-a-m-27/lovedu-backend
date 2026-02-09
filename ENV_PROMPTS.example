@@ -1,0 +1,30 @@
+# Copy the relevant lines into backend/.env and fill in the values.
+# NOTE: Do NOT commit backend/.env (keep secrets local).
+#
+# Prompts are loaded by: backend/app/services/openai_service.py
+#
+# You can provide prompts either:
+# - Inline:  AGENT_PROMPT_XXX="line1\nline2\n..."
+# - File:    AGENT_PROMPT_XXX_PATH=backend/prompts/typex.txt   (relative to repo root) or absolute path
+#
+
+# Optional global prefix applied to all assistants:
+AGENT_PROMPT_BASE="IMPORTANT CONTEXT RESTRICTION:\nYou MUST ONLY answer questions that are directly related to the provided context or conversation history.\nIf a question is outside the context, politely decline.\nDo NOT make up information.\n"
+# AGENT_PROMPT_BASE_PATH=backend/prompts/base.txt
+
+# Required per-assistant prompts:
+AGENT_PROMPT_TYPEX="You are LovEdu – Kuwait University Advisor.\n(Define role, scope, rules, and closing line here.)\n"
+AGENT_PROMPT_REFERENCES="You are LovEdu – Kuwait University Student Rights Advisor.\n(Define role, scope, citation rules, and closing line here.)\n"
+AGENT_PROMPT_ACADEMIC_REFERENCES="You are LovEdu – References Advisor.\n(Define APA/KU rules here.)\n"
+AGENT_PROMPT_THERAPY_GPT="You are LovEdu – Success Stories Advisor.\n(Define scope and constraints here.)\n"
+AGENT_PROMPT_WHATS_TRENDY="You are LovEdu – What's Trendy Advisor.\n(Define scope and constraints here.)\n"
+AGENT_PROMPT_COURSE="You are a course-specific assistant.\n(Define constraints: only answer from course materials.)\n"
+
+# File-based alternative examples:
+# AGENT_PROMPT_TYPEX_PATH=backend/prompts/typex.txt
+# AGENT_PROMPT_REFERENCES_PATH=backend/prompts/references.txt
+# AGENT_PROMPT_ACADEMIC_REFERENCES_PATH=backend/prompts/academic_references.txt
+# AGENT_PROMPT_THERAPY_GPT_PATH=backend/prompts/therapy_gpt.txt
+# AGENT_PROMPT_WHATS_TRENDY_PATH=backend/prompts/whats_trendy.txt
+# AGENT_PROMPT_COURSE_PATH=backend/prompts/course.txt
+
