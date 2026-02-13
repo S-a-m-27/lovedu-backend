@@ -379,7 +379,8 @@ class SupabaseService:
             # Build user metadata
             metadata = {
                 "plan": "free",  # Set default plan to free
-                "is_ku_member": is_ku_email  # Track if user is KU member
+                "is_ku_member": is_ku_email,  # Track if user is KU member
+                "original_email": email  # Preserve original email casing for display
             }
             
             # Merge with provided metadata (which may include full_name, date_of_birth)
@@ -424,7 +425,15 @@ class SupabaseService:
             logger.exception("Full ValueError traceback:")
             raise Exception(error_msg)
         except Exception as e:
-            error_msg = f"Sign up failed: {str(e)}"
+            error_str = str(e).lower()
+            
+            # Check for rate limit errors
+            if "rate limit" in error_str or "too many" in error_str:
+                error_msg = "Too many signup attempts. Please wait a few minutes before trying again."
+                logger.warning(f"⚠️  Rate limit exceeded for: {email}")
+            else:
+                error_msg = f"Sign up failed: {str(e)}"
+            
             error_type = type(e).__name__
             logger.error(f"❌ {error_msg} - Email: {email}")
             logger.error(f"   Exception Type: {error_type}")

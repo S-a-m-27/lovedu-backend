@@ -166,15 +166,25 @@ async def signup(
             detail=f"Signup failed: {str(ve)}"
         )
     except Exception as e:
-        error_msg = f"Signup failed: {str(e)}"
+        error_str = str(e).lower()
+        
+        # Check for rate limit errors and provide better status code
+        if "rate limit" in error_str or "too many" in error_str:
+            error_msg = "Too many signup attempts. Please wait a few minutes before trying again."
+            status_code = status.HTTP_429_TOO_MANY_REQUESTS
+            logger.warning(f"⚠️  Rate limit exceeded for: {request.email}")
+        else:
+            error_msg = f"Signup failed: {str(e)}"
+            status_code = status.HTTP_400_BAD_REQUEST
+        
         error_type = type(e).__name__
         logger.error(f"❌ {error_msg} - Email: {request.email}")
         logger.error(f"   Exception Type: {error_type}")
         logger.error(f"   Exception Args: {e.args if hasattr(e, 'args') else 'N/A'}")
         logger.exception("Full error traceback:")
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Signup failed: {str(e)}"
+            status_code=status_code,
+            detail=error_msg
         )
 
 @router.post("/verify-token", response_model=UserResponse)
