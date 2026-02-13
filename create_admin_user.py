@@ -17,7 +17,7 @@ load_dotenv()
 def generate_random_email():
     """Generate a random admin email"""
     random_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
-    return f"admin_{random_id}@ku.edu.kw"
+    return f"admin_{random_id}@grad.ku.edu.kw"
 
 def generate_random_password():
     """Generate a secure random password"""
@@ -74,9 +74,34 @@ def create_admin_user():
                 "role": "admin",
                 "plan": "free",
                 "full_name": admin_name,
-                "is_ku_member": True
+                "is_ku_member": True,
+                "email_verified": True
             }
         })
+        
+        # Ensure email is confirmed by updating the user if needed
+        if response.user:
+            try:
+                # Update user to ensure email_confirmed_at is set
+                from datetime import datetime
+                update_response = supabase.auth.admin.update_user_by_id(
+                    response.user.id,
+                    {
+                        "email_confirm": True,
+                        "user_metadata": {
+                            "is_admin": True,
+                            "role": "admin",
+                            "plan": "free",
+                            "full_name": admin_name,
+                            "is_ku_member": True,
+                            "email_verified": True
+                        }
+                    }
+                )
+                print("✅ Email confirmation verified")
+            except Exception as update_err:
+                print(f"⚠️  Warning: Could not update email confirmation: {update_err}")
+                print("   User was created but email confirmation may need manual verification in Supabase Dashboard")
         
         if response.user:
             print("\n✅ Admin user created successfully!")
@@ -93,7 +118,7 @@ def create_admin_user():
             
             # Also save to a file for reference (optional)
             try:
-                with open("admin_credentials.txt", "w") as f:
+                with open("admin_credentials.txt", "w", encoding="utf-8") as f:
                     f.write("ADMIN USER CREDENTIALS\n")
                     f.write("="*60 + "\n")
                     f.write(f"Email: {admin_email}\n")
@@ -125,17 +150,19 @@ def create_admin_user():
                 user = next((u for u in users_response.users if u.email == admin_email), None)
                 
                 if user:
-                    # Update user metadata to admin
+                    # Update user metadata to admin and ensure email is confirmed
                     update_response = supabase.auth.admin.update_user_by_id(
                         user.id,
                         {
+                            "email_confirm": True,  # Ensure email is confirmed
                             "user_metadata": {
                                 **(user.user_metadata or {}),
                                 "is_admin": True,
                                 "role": "admin",
                                 "plan": "free",
                                 "full_name": admin_name,
-                                "is_ku_member": True
+                                "is_ku_member": True,
+                                "email_verified": True
                             }
                         }
                     )

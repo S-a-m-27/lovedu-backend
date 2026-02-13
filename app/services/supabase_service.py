@@ -374,7 +374,7 @@ class SupabaseService:
             anon_client = create_client(supabase_url, supabase_anon_key)
             
             # Determine if email is from Kuwait University
-            is_ku_email = email.endswith("@ku.edu.kw") if email else False
+            is_ku_email = email.endswith("@grad.ku.edu.kw") if email else False
             
             # Build user metadata
             metadata = {
