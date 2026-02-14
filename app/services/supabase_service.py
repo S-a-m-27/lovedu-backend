@@ -394,10 +394,11 @@ class SupabaseService:
             logger.info(f"📤 Creating user via Admin API (bypasses rate limits) for: {email}")
             try:
                 # Use admin.create_user instead of auth.sign_up to bypass rate limits
+                # Set email_confirm to False to send verification email via custom SMTP
                 response = admin_client.auth.admin.create_user({
                     "email": email,
                     "password": password,
-                    "email_confirm": True,  # Auto-confirm email (no verification needed)
+                    "email_confirm": False,  # Send verification email (uses custom SMTP)
                     "user_metadata": metadata
                 })
                 logger.debug(f"   Supabase API call completed - Response type: {type(response)}")
@@ -414,36 +415,43 @@ class SupabaseService:
                 logger.debug(f"   User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
                 logger.debug(f"   Email confirmed: {response.user.email_confirmed_at if hasattr(response.user, 'email_confirmed_at') else 'N/A'}")
                 
-                # Admin API doesn't return a session, so we need to sign in to get one
-                # Use anon key client to sign in and get a session
-                logger.info("🔑 Signing in user to create session...")
-                try:
-                    supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
-                    if supabase_anon_key:
-                        anon_client = create_client(supabase_url, supabase_anon_key)
-                        sign_in_response = anon_client.auth.sign_in_with_password({
-                            "email": email,
-                            "password": password
-                        })
-                        
-                        if sign_in_response.session:
-                            logger.info("✅ Session created successfully")
-                            # Create a response object with both user and session
-                            class SignUpResponse:
-                                def __init__(self, user, session):
-                                    self.user = user
-                                    self.session = session
-                            
-                            return SignUpResponse(response.user, sign_in_response.session)
-                        else:
-                            logger.warning("⚠️  Sign in returned no session, but user was created")
-                    else:
-                        logger.warning("⚠️  SUPABASE_ANON_KEY not set, cannot create session")
-                except Exception as sign_in_error:
-                    logger.warning(f"⚠️  Could not sign in user after creation: {str(sign_in_error)}")
-                    logger.info("   User was created but session creation failed - user can sign in manually")
+                # Check if email is confirmed
+                email_confirmed = hasattr(response.user, 'email_confirmed_at') and response.user.email_confirmed_at is not None
                 
-                # Return response with user but no session (user can sign in manually)
+                if email_confirmed:
+                    # Email is confirmed, create session
+                    logger.info("🔑 Email confirmed, signing in user to create session...")
+                    try:
+                        supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+                        if supabase_anon_key:
+                            anon_client = create_client(supabase_url, supabase_anon_key)
+                            sign_in_response = anon_client.auth.sign_in_with_password({
+                                "email": email,
+                                "password": password
+                            })
+                            
+                            if sign_in_response.session:
+                                logger.info("✅ Session created successfully")
+                                # Create a response object with both user and session
+                                class SignUpResponse:
+                                    def __init__(self, user, session):
+                                        self.user = user
+                                        self.session = session
+                                
+                                return SignUpResponse(response.user, sign_in_response.session)
+                            else:
+                                logger.warning("⚠️  Sign in returned no session, but user was created")
+                        else:
+                            logger.warning("⚠️  SUPABASE_ANON_KEY not set, cannot create session")
+                    except Exception as sign_in_error:
+                        logger.warning(f"⚠️  Could not sign in user after creation: {str(sign_in_error)}")
+                        logger.info("   User was created but session creation failed - user can sign in manually")
+                else:
+                    # Email not confirmed - Supabase should automatically send verification email
+                    logger.info("📧 User created but email not confirmed - verification email should be sent via custom SMTP")
+                    logger.info("   Note: Ensure custom SMTP is enabled in Supabase Dashboard > Authentication > Email Templates")
+                
+                # Return response with user but no session (user needs to verify email first)
                 class SignUpResponse:
                     def __init__(self, user):
                         self.user = user
