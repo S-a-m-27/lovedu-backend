@@ -350,33 +350,33 @@ class SupabaseService:
             raise Exception(error_msg)
     
     def sign_up(self, email: str, password: str, user_metadata: Optional[dict] = None):
-        """Sign up new user - uses auth.sign_up which automatically sends verification emails via custom SMTP"""
+        """Sign up new user - uses admin.create_user for fast creation, then sends verification email separately"""
         logger.info(f"📝 Attempting sign up for email: {email}")
         try:
-            # Use ANON KEY - auth.sign_up automatically sends verification emails via custom SMTP
+            # Use SERVICE ROLE KEY for fast user creation (doesn't wait for email)
             from supabase import create_client
             import os
-            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
             
             supabase_url = os.getenv("SUPABASE_URL")
-            supabase_anon_key = os.getenv("SUPABASE_ANON_KEY")
+            supabase_service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
             
             logger.debug(f"📋 SUPABASE_URL: {supabase_url if supabase_url else 'NOT SET'}")
-            if supabase_anon_key:
-                masked_key = supabase_anon_key[:10] + "..." + supabase_anon_key[-4:] if len(supabase_anon_key) > 14 else "***"
-                logger.debug(f"📋 SUPABASE_ANON_KEY: {masked_key} (loaded)")
+            if supabase_service_key:
+                masked_key = supabase_service_key[:10] + "..." + supabase_service_key[-4:] if len(supabase_service_key) > 14 else "***"
+                logger.debug(f"📋 SUPABASE_SERVICE_ROLE_KEY: {masked_key} (loaded)")
             else:
-                logger.error("❌ SUPABASE_ANON_KEY: NOT SET")
+                logger.error("❌ SUPABASE_SERVICE_ROLE_KEY: NOT SET")
             
-            if not supabase_url or not supabase_anon_key:
-                error_msg = "SUPABASE_URL and SUPABASE_ANON_KEY must be set"
+            if not supabase_url or not supabase_service_key:
+                error_msg = "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set"
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            # Configure client with timeout for signup
+            logger.info("🔧 Creating Supabase admin client for fast user creation...")
+            # Configure timeout for admin client (for email sending operations)
             timeout_config = Timeout(
                 connect=10.0,
-                read=60.0,  # 60 seconds - enough for SMTP email sending
+                read=30.0,  # 30 seconds for email sending
                 write=10.0,
                 pool=5.0
             )
@@ -387,8 +387,13 @@ class SupabaseService:
                 headers={}
             )
             
-            logger.info("🔧 Creating Supabase anon client for signup (automatically sends verification email)...")
-            anon_client = create_client(supabase_url, supabase_anon_key, options=client_options)
+            logger.debug(f"   📋 Timeout Configuration:")
+            logger.debug(f"      - Connect Timeout: {timeout_config.connect}s")
+            logger.debug(f"      - Read Timeout: {timeout_config.read}s")
+            logger.debug(f"      - Write Timeout: {timeout_config.write}s")
+            logger.debug(f"      - Pool Timeout: {timeout_config.pool}s")
+            
+            admin_client = create_client(supabase_url, supabase_service_key, options=client_options)
             
             # Determine if email is from Kuwait University
             is_ku_email = email.endswith("@grad.ku.edu.kw") if email else False
@@ -406,170 +411,132 @@ class SupabaseService:
             
             logger.debug(f"User metadata included - Plan: free, Is KU Member: {is_ku_email}, Additional: {user_metadata}")
             
-            logger.info(f"📤 Creating user via auth.sign_up (automatically sends verification email via custom SMTP) for: {email}")
-            logger.info(f"   📧 Email verification will be sent automatically by Supabase via custom SMTP")
+            logger.info(f"📤 Creating user via admin.create_user (fast, non-blocking) for: {email}")
+            logger.info(f"   📧 Verification email will be sent separately after user creation")
             
-            # Use regular auth.sign_up - this automatically sends verification emails via custom SMTP
-            # Wrap in timeout to handle slow SMTP servers gracefully
+            # Use admin.create_user - fast, doesn't wait for email sending
             try:
-                def signup_with_timeout():
-                    logger.debug(f"   🔄 Calling Supabase auth.sign_up API for: {email}")
-                    result = anon_client.auth.sign_up({
-                        "email": email,
-                        "password": password,
-                        "options": {
-                            "data": metadata
-                        }
+                logger.debug(f"   🔄 Calling Supabase admin.create_user API for: {email}")
+                response = admin_client.auth.admin.create_user({
+                    "email": email,
+                    "password": password,
+                    "email_confirm": False,  # Don't auto-confirm, email will be sent separately
+                    "user_metadata": metadata
+                })
+                logger.debug(f"   ✅ Supabase admin.create_user API call completed for: {email}")
+                
+                if not response.user:
+                    logger.error(f"❌ User creation failed - no user object returned for: {email}")
+                    raise Exception("User creation failed - no user object returned")
+                
+                logger.info(f"✅ User created successfully for: {email} (User ID: {response.user.id})")
+                
+                # Now send verification email using admin.generate_link
+                logger.info(f"📧 Sending verification email via admin.generate_link for: {email}")
+                logger.debug(f"   📋 Email sending configuration:")
+                logger.debug(f"      - Method: admin.generate_link")
+                logger.debug(f"      - Type: signup")
+                logger.debug(f"      - Email: {email}")
+                try:
+                    import time
+                    start_time = time.time()
+                    logger.debug(f"   ⏱️  Starting email send request at: {start_time}")
+                    
+                    link_response = admin_client.auth.admin.generate_link({
+                        "type": "signup",
+                        "email": email
                     })
-                    logger.debug(f"   ✅ Supabase auth.sign_up API call completed for: {email}")
-                    return result
-                
-                # Execute with timeout using thread pool
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(signup_with_timeout)
-                    try:
-                        response = future.result(timeout=55.0)  # 55 seconds timeout
-                    except FutureTimeoutError:
-                        logger.warning(f"⚠️  Signup timed out for {email}, but user may have been created and email sent")
-                        logger.info(f"   📧 Attempting to verify user creation and email status...")
-                        
-                        # Check if user exists (user might have been created before timeout)
-                        try:
-                            # Try to verify user was created using admin API
-                            admin_client = create_client(supabase_url, os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
-                            
-                            # Try to get user by email to verify creation succeeded
-                            logger.debug(f"   🔍 Checking if user was created for: {email}")
-                            try:
-                                # List users and find by email (admin API)
-                                users_response = admin_client.auth.admin.list_users()
-                                user_found = None
-                                if hasattr(users_response, 'users'):
-                                    for u in users_response.users:
-                                        if hasattr(u, 'email') and u.email.lower() == email.lower():
-                                            user_found = u
-                                            break
-                                
-                                if user_found:
-                                    logger.info(f"   ✅ Verified: User was created successfully (User ID: {user_found.id})")
-                                    
-                                    # Check email confirmation status
-                                    email_confirmed = hasattr(user_found, 'email_confirmed_at') and user_found.email_confirmed_at is not None
-                                    email_confirmed_at = user_found.email_confirmed_at if hasattr(user_found, 'email_confirmed_at') else None
-                                    
-                                    if email_confirmed:
-                                        logger.info(f"   ✅ Email already confirmed at: {email_confirmed_at}")
-                                        logger.info(f"   📧 EMAIL VERIFICATION STATUS: CONFIRMED")
-                                    else:
-                                        logger.info(f"   📧 Email NOT confirmed - verification email should have been sent")
-                                        logger.info(f"   📧 EMAIL VERIFICATION STATUS: PENDING")
-                                        logger.info(f"   📧 Supabase should have sent verification email automatically via custom SMTP")
-                                        logger.info(f"   📧 If email not received, check:")
-                                        logger.info(f"      - Supabase Dashboard > Logs > Auth Logs for email sending errors")
-                                        logger.info(f"      - Custom SMTP settings in Supabase Dashboard > Settings > Auth > SMTP Settings")
-                                        logger.info(f"      - Email spam/junk folder")
-                                    
-                                    # Return response with user info
-                                    class SignUpResponse:
-                                        def __init__(self, user=None):
-                                            self.user = user
-                                            self.session = None
-                                    return SignUpResponse(user_found)  # Return the found user
-                                else:
-                                    logger.warning(f"   ⚠️  Could not find user in admin list after timeout")
-                                    logger.warning(f"   📧 EMAIL VERIFICATION STATUS: UNKNOWN (user not found)")
-                                    logger.info(f"   📧 User creation may have failed or is still in progress")
-                                    class SignUpResponse:
-                                        def __init__(self, user=None):
-                                            self.user = user
-                                            self.session = None
-                                    return SignUpResponse(None)
-                            except Exception as list_error:
-                                logger.debug(f"   Could not list users to verify: {str(list_error)}")
-                                logger.warning(f"   ⚠️  Could not verify user creation status")
-                                logger.info(f"   📧 EMAIL VERIFICATION STATUS: UNKNOWN (verification check failed)")
-                            
-                            # Return a response indicating success but no session
-                            # Supabase sends emails asynchronously, so email should still be delivered
-                            logger.info(f"   📧 Email should be sent asynchronously by Supabase")
-                            logger.info(f"   📧 Check Supabase Dashboard > Logs > Auth Logs to verify email was sent")
-                            class SignUpResponse:
-                                def __init__(self, user=None):
-                                    self.user = user
-                                    self.session = None
-                            return SignUpResponse(None)  # User exists but we don't have the object
-                        except Exception as verify_error:
-                            # If we can't verify, still assume success to avoid blocking user
-                            logger.warning(f"   ⚠️  Could not verify user creation: {str(verify_error)}")
-                            logger.warning(f"   📧 EMAIL VERIFICATION STATUS: UNKNOWN (verification check failed)")
-                            logger.info(f"   User creation likely succeeded, email should be sent")
-                            logger.info(f"   📧 Check Supabase Dashboard > Logs > Auth Logs to verify email was sent")
-                            class SignUpResponse:
-                                def __init__(self, user=None):
-                                    self.user = user
-                                    self.session = None
-                            return SignUpResponse(None)
-                
-                logger.debug(f"   Supabase API call completed - Response type: {type(response)}")
-                
-                # Log response details for debugging
-                if hasattr(response, 'user') and response.user:
-                    logger.debug(f"   📋 Response details - User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
-                    logger.debug(f"   📋 Response details - Has session: {hasattr(response, 'session') and response.session is not None}")
-            except Exception as supabase_error:
-                error_str = str(supabase_error).lower()
-                
-                # Check if it's a timeout - user might still have been created
-                if "timeout" in error_str or "timed out" in error_str:
-                    logger.warning(f"⚠️  Signup timed out for {email}, but user may have been created and email sent")
-                    logger.info(f"   📧 Supabase sends emails asynchronously, so email should still be delivered")
-                    logger.info(f"   📧 Attempting to verify user creation and email status...")
                     
-                    # Try to verify user was created
-                    try:
-                        admin_client = create_client(supabase_url, os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
-                        users_response = admin_client.auth.admin.list_users()
-                        user_found = None
-                        if hasattr(users_response, 'users'):
-                            for u in users_response.users:
-                                if hasattr(u, 'email') and u.email.lower() == email.lower():
-                                    user_found = u
-                                    break
-                        
-                        if user_found:
-                            logger.info(f"   ✅ User found: {user_found.id}")
-                            email_confirmed = hasattr(user_found, 'email_confirmed_at') and user_found.email_confirmed_at is not None
-                            if email_confirmed:
-                                logger.info(f"   ✅ EMAIL VERIFICATION STATUS: CONFIRMED")
-                            else:
-                                logger.info(f"   📧 EMAIL VERIFICATION STATUS: PENDING (verification email should have been sent)")
-                                logger.info(f"   📧 Check Supabase Dashboard > Logs > Auth Logs for email sending status")
-                        else:
-                            logger.warning(f"   ⚠️  EMAIL VERIFICATION STATUS: UNKNOWN (user not found)")
-                            logger.info(f"   📧 Check Supabase Dashboard > Logs > Auth Logs to verify user creation and email status")
-                    except Exception as verify_err:
-                        logger.warning(f"   ⚠️  Could not verify: {str(verify_err)}")
-                        logger.info(f"   📧 EMAIL VERIFICATION STATUS: UNKNOWN (check Supabase Auth logs)")
+                    elapsed_time = time.time() - start_time
+                    logger.info(f"✅ Verification email triggered successfully for: {email}")
+                    logger.info(f"   ⏱️  Email send completed in {elapsed_time:.2f} seconds")
+                    logger.info(f"   📧 EMAIL VERIFICATION STATUS: EMAIL SENT")
+                    logger.info(f"   📧 User should check their email inbox for verification link")
+                except Exception as email_error:
+                    elapsed_time = time.time() - start_time if 'start_time' in locals() else None
+                    error_type = type(email_error).__name__
+                    error_str = str(email_error).lower()
                     
-                    # Return success - user was likely created and email will be sent
-                    class SignUpResponse:
-                        def __init__(self, user=None):
-                            self.user = user
-                            self.session = None
-                    return SignUpResponse(None)
-                
-                logger.error(f"   ❌ Supabase API call failed: {str(supabase_error)}")
-                logger.error(f"   Error type: {type(supabase_error).__name__}")
-                logger.error(f"   📧 Email verification status: UNKNOWN (signup failed)")
-                logger.exception("   Supabase error traceback:")
-                raise
-            
-            logger.debug(f"   Response has user: {hasattr(response, 'user')}")
-            logger.debug(f"   Response has session: {hasattr(response, 'session')}")
-            
-            if response.user:
-                logger.info(f"✅ User created successfully for: {email}")
-                logger.debug(f"   User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
+                    logger.error(f"❌ EMAIL SENDING FAILED for {email}")
+                    logger.error(f"   📧 EMAIL VERIFICATION STATUS: EMAIL SENDING FAILED")
+                    logger.error(f"   🔍 Error Details:")
+                    logger.error(f"      - Error Type: {error_type}")
+                    logger.error(f"      - Error Message: {str(email_error)}")
+                    if elapsed_time:
+                        logger.error(f"      - Time Elapsed: {elapsed_time:.2f} seconds")
+                    
+                    # Check for timeout-related errors
+                    is_timeout = False
+                    timeout_details = []
+                    
+                    if "timeout" in error_str or "timed out" in error_str:
+                        is_timeout = True
+                        timeout_details.append("⚠️  TIMEOUT DETECTED")
+                        logger.error(f"   ⚠️  TIMEOUT ERROR DETECTED")
+                        logger.error(f"      - This indicates the SMTP server or Supabase email service is taking too long to respond")
+                    
+                    if "read operation timed out" in error_str or "read timeout" in error_str:
+                        is_timeout = True
+                        timeout_details.append("Read timeout - SMTP server response too slow")
+                        logger.error(f"      - Read Timeout: The SMTP server did not respond in time")
+                        logger.error(f"      - Possible causes:")
+                        logger.error(f"         * SMTP server is slow or overloaded")
+                        logger.error(f"         * Network latency issues")
+                        logger.error(f"         * Custom SMTP configuration issues")
+                    
+                    if "connect timeout" in error_str or "connection timeout" in error_str:
+                        is_timeout = True
+                        timeout_details.append("Connection timeout - Cannot connect to SMTP server")
+                        logger.error(f"      - Connection Timeout: Cannot establish connection to SMTP server")
+                        logger.error(f"      - Possible causes:")
+                        logger.error(f"         * SMTP server host/port incorrect")
+                        logger.error(f"         * Firewall blocking connection")
+                        logger.error(f"         * SMTP server is down")
+                    
+                    if "write timeout" in error_str:
+                        is_timeout = True
+                        timeout_details.append("Write timeout - SMTP server not accepting data")
+                        logger.error(f"      - Write Timeout: SMTP server not accepting data fast enough")
+                    
+                    # Log full exception details
+                    logger.error(f"   📋 Full Exception Details:")
+                    logger.error(f"      - Exception Type: {error_type}")
+                    logger.error(f"      - Exception Args: {email_error.args if hasattr(email_error, 'args') else 'N/A'}")
+                    if hasattr(email_error, '__cause__') and email_error.__cause__:
+                        logger.error(f"      - Caused by: {type(email_error.__cause__).__name__}: {str(email_error.__cause__)}")
+                    if hasattr(email_error, '__context__') and email_error.__context__:
+                        logger.error(f"      - Context: {type(email_error.__context__).__name__}: {str(email_error.__context__)}")
+                    
+                    # Log full traceback
+                    import traceback
+                    logger.error(f"   📋 Full Traceback:")
+                    for line in traceback.format_exception(type(email_error), email_error, email_error.__traceback__):
+                        for traceback_line in line.strip().split('\n'):
+                            if traceback_line.strip():
+                                logger.error(f"      {traceback_line}")
+                    
+                    # Provide troubleshooting guidance
+                    logger.error(f"   🔧 Troubleshooting Steps:")
+                    logger.error(f"      1. Check Supabase Dashboard > Logs > Auth Logs for detailed email sending errors")
+                    logger.error(f"      2. Verify Custom SMTP settings in Supabase Dashboard > Settings > Auth > SMTP Settings")
+                    logger.error(f"         - SMTP Host: Should be correct and accessible")
+                    logger.error(f"         - SMTP Port: Should match your SMTP provider's requirements")
+                    logger.error(f"         - SMTP Username/Password: Should be valid")
+                    logger.error(f"         - Sender Email: Should be verified with your SMTP provider")
+                    logger.error(f"      3. Test SMTP connection from Supabase Dashboard")
+                    logger.error(f"      4. Check if SMTP provider has rate limits or blocking")
+                    logger.error(f"      5. Verify email template is enabled in Supabase Dashboard > Authentication > Email Templates")
+                    
+                    if is_timeout:
+                        logger.error(f"   ⏱️  TIMEOUT-SPECIFIC TROUBLESHOOTING:")
+                        logger.error(f"      - Increase SMTP timeout settings in Supabase (if available)")
+                        logger.error(f"      - Check SMTP server response times")
+                        logger.error(f"      - Consider using a different SMTP provider if current one is consistently slow")
+                        logger.error(f"      - Verify network connectivity to SMTP server")
+                    
+                    logger.warning(f"   ⚠️  User was created successfully, but verification email sending failed")
+                    logger.info(f"   📧 User can request email resend from Supabase dashboard if needed")
+                    # Don't fail signup if email sending fails - user can request resend
                 
                 # Check email confirmation status
                 email_confirmed = hasattr(response.user, 'email_confirmed_at') and response.user.email_confirmed_at is not None
@@ -577,70 +544,26 @@ class SupabaseService:
                 
                 if email_confirmed:
                     logger.info(f"   ✅ Email already confirmed at: {email_confirmed_at}")
+                    logger.info(f"   📧 EMAIL VERIFICATION STATUS: CONFIRMED")
                 else:
-                    logger.info(f"   📧 Email NOT confirmed - verification email should have been sent automatically")
-                    logger.info(f"   📧 Email verification status: PENDING (user should check inbox for verification link)")
-                    logger.info(f"   📧 If email not received, check:")
-                    logger.info(f"      - Supabase Dashboard > Logs > Auth Logs for email sending errors")
-                    logger.info(f"      - Custom SMTP settings in Supabase Dashboard > Settings > Auth > SMTP Settings")
-                    logger.info(f"      - Email spam/junk folder")
-                
-                logger.debug(f"   Email confirmed timestamp: {email_confirmed_at if email_confirmed_at else 'None (verification required)'}")
-                
-                if response.session:
-                    # User is auto-confirmed and has a session
-                    logger.info("✅ User created and session established (email auto-confirmed)")
-                    class SignUpResponse:
-                        def __init__(self, user, session):
-                            self.user = user
-                            self.session = session
-                    return SignUpResponse(response.user, response.session)
-                elif email_confirmed:
-                    # Email is confirmed but no session - sign in to get session
-                    logger.info("🔑 Email confirmed, signing in user to create session...")
-                    try:
-                        sign_in_response = anon_client.auth.sign_in_with_password({
-                            "email": email,
-                            "password": password
-                        })
-                        
-                        if sign_in_response.session:
-                            logger.info("✅ Session created successfully")
-                            class SignUpResponse:
-                                def __init__(self, user, session):
-                                    self.user = user
-                                    self.session = session
-                            return SignUpResponse(response.user, sign_in_response.session)
-                        else:
-                            logger.warning("⚠️  Sign in returned no session, but user was created")
-                    except Exception as sign_in_error:
-                        logger.warning(f"⚠️  Could not sign in user after creation: {str(sign_in_error)}")
-                        logger.info("   User was created but session creation failed - user can sign in manually")
-                else:
-                    # Email not confirmed - verification email should have been sent automatically
-                    logger.info("📧 User created but email not confirmed - verification email should have been sent automatically via custom SMTP")
-                    logger.info("   📧 EMAIL VERIFICATION STATUS: PENDING")
-                    logger.info("   📧 Supabase auth.sign_up should have automatically sent verification email")
-                    logger.info("   📧 User should check their email inbox (including spam folder) for verification link")
-                    logger.info("   📧 If email not received, verify:")
-                    logger.info("      - Supabase Dashboard > Settings > Auth > SMTP Settings (custom SMTP enabled)")
-                    logger.info("      - Supabase Dashboard > Authentication > Email Templates (Confirm signup template enabled)")
-                    logger.info("      - Supabase Dashboard > Logs > Auth Logs (check for email sending errors)")
+                    logger.info(f"   📧 Email NOT confirmed - verification required")
+                    logger.info(f"   📧 EMAIL VERIFICATION STATUS: PENDING")
                 
                 # Return response with user but no session (user needs to verify email first)
-                logger.info(f"📧 FINAL EMAIL VERIFICATION STATUS for {email}:")
-                logger.info(f"   - Email confirmed: {email_confirmed}")
-                logger.info(f"   - Verification email: Should have been sent automatically by Supabase")
-                logger.info(f"   - Next step: User should check email inbox for verification link")
-                if not email_confirmed:
-                    logger.warning(f"   ⚠️  If email not received, check Supabase Auth logs for sending errors")
-                
                 class SignUpResponse:
                     def __init__(self, user):
                         self.user = user
                         self.session = None
                 
                 return SignUpResponse(response.user)
+            except Exception as supabase_error:
+                error_str = str(supabase_error).lower()
+                
+                logger.error(f"   ❌ Supabase API call failed: {str(supabase_error)}")
+                logger.error(f"   Error type: {type(supabase_error).__name__}")
+                logger.error(f"   📧 Email verification status: UNKNOWN (signup failed)")
+                logger.exception("   Supabase error traceback:")
+                raise
             else:
                 logger.error(f"❌ User creation failed - no user object returned for: {email}")
                 raise Exception("User creation failed - no user object returned")
@@ -699,17 +622,51 @@ class SupabaseService:
             except Exception as email_error:
                 # Don't fail if email sending fails - it's best-effort
                 # User was already created, so this is just a notification
+                error_type = type(email_error).__name__
                 error_str = str(email_error).lower()
-                logger.warning(f"⚠️  Could not trigger verification email to {email}: {str(email_error)}")
+                
+                logger.error(f"❌ EMAIL SENDING FAILED in send_verification_email for {email}")
+                logger.error(f"   🔍 Error Details:")
+                logger.error(f"      - Error Type: {error_type}")
+                logger.error(f"      - Error Message: {str(email_error)}")
+                
+                # Check for timeout-related errors
+                is_timeout = False
+                if "timeout" in error_str or "timed out" in error_str:
+                    is_timeout = True
+                    logger.error(f"   ⚠️  TIMEOUT ERROR DETECTED")
+                    logger.error(f"      - This indicates the SMTP server or Supabase email service is taking too long")
+                
+                if "read operation timed out" in error_str or "read timeout" in error_str:
+                    is_timeout = True
+                    logger.error(f"      - Read Timeout: SMTP server response too slow")
+                
+                if "connect timeout" in error_str or "connection timeout" in error_str:
+                    is_timeout = True
+                    logger.error(f"      - Connection Timeout: Cannot connect to SMTP server")
+                
+                # Log full exception details
+                import traceback
+                logger.error(f"   📋 Full Exception Traceback:")
+                for line in traceback.format_exception(type(email_error), email_error, email_error.__traceback__):
+                    for traceback_line in line.strip().split('\n'):
+                        if traceback_line.strip():
+                            logger.error(f"      {traceback_line}")
                 
                 # Check if it's because user already exists or other recoverable error
                 if "already" in error_str or "exists" in error_str:
-                    logger.info("   User already exists - email may have been sent during creation")
+                    logger.info("   ✅ User already exists - email may have been sent during creation")
                     return True
                 
-                logger.info("   User was created successfully, but email trigger failed")
-                logger.info("   Note: Supabase may still send the email automatically")
-                logger.info("   User can request email resend from Supabase dashboard if needed")
+                if is_timeout:
+                    logger.error(f"   ⏱️  TIMEOUT-SPECIFIC TROUBLESHOOTING:")
+                    logger.error(f"      - Check SMTP server response times")
+                    logger.error(f"      - Verify SMTP configuration in Supabase Dashboard")
+                    logger.error(f"      - Check network connectivity to SMTP server")
+                
+                logger.warning("   ⚠️  User was created successfully, but email trigger failed")
+                logger.info("   📧 Note: Supabase may still send the email automatically")
+                logger.info("   📧 User can request email resend from Supabase dashboard if needed")
                 # Return True anyway - user was created successfully
                 return True
                 
