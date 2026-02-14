@@ -351,7 +351,16 @@ class SupabaseService:
     
     def sign_up(self, email: str, password: str, user_metadata: Optional[dict] = None):
         """Sign up new user - uses admin.create_user for fast creation, then sends verification email separately"""
+        import time
+        signup_start_time = time.time()
+        
         logger.info(f"📝 Attempting sign up for email: {email}")
+        logger.info(f"   ⏱️  Signup process started at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(signup_start_time))}")
+        logger.info(f"   📋 Signup parameters:")
+        logger.info(f"      - Email: {email}")
+        logger.info(f"      - Password length: {len(password) if password else 0} characters")
+        logger.info(f"      - User metadata provided: {bool(user_metadata)}")
+        
         try:
             # Use SERVICE ROLE KEY for fast user creation (doesn't wait for email)
             from supabase import create_client
@@ -387,13 +396,15 @@ class SupabaseService:
                 headers={}
             )
             
-            logger.debug(f"   📋 Timeout Configuration:")
-            logger.debug(f"      - Connect Timeout: {timeout_config.connect}s")
-            logger.debug(f"      - Read Timeout: {timeout_config.read}s")
-            logger.debug(f"      - Write Timeout: {timeout_config.write}s")
-            logger.debug(f"      - Pool Timeout: {timeout_config.pool}s")
+            logger.info(f"   📋 Timeout Configuration (for email operations):")
+            logger.info(f"      - Connect Timeout: {timeout_config.connect}s")
+            logger.info(f"      - Read Timeout: {timeout_config.read}s")
+            logger.info(f"      - Write Timeout: {timeout_config.write}s")
+            logger.info(f"      - Pool Timeout: {timeout_config.pool}s")
+            logger.info(f"   ⚠️  NOTE: If email sending takes longer than {timeout_config.read}s, it will timeout")
             
             admin_client = create_client(supabase_url, supabase_service_key, options=client_options)
+            logger.info(f"   ✅ Admin client created with timeout configuration")
             
             # Determine if email is from Kuwait University
             is_ku_email = email.endswith("@grad.ku.edu.kw") if email else False
@@ -433,39 +444,79 @@ class SupabaseService:
                 
                 # Now send verification email using admin.generate_link
                 logger.info(f"📧 Sending verification email via admin.generate_link for: {email}")
-                logger.debug(f"   📋 Email sending configuration:")
-                logger.debug(f"      - Method: admin.generate_link")
-                logger.debug(f"      - Type: signup")
-                logger.debug(f"      - Email: {email}")
+                logger.info(f"   📋 Email sending configuration:")
+                logger.info(f"      - Method: admin.generate_link")
+                logger.info(f"      - Type: signup")
+                logger.info(f"      - Email: {email}")
+                logger.info(f"      - Supabase URL: {supabase_url}")
+                logger.info(f"      - Expected timeout: {timeout_config.read}s")
+                
                 try:
-                    import time
                     start_time = time.time()
-                    logger.debug(f"   ⏱️  Starting email send request at: {start_time}")
+                    logger.info(f"   ⏱️  Starting email send request at: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start_time))}")
+                    logger.info(f"   ⏱️  Timestamp: {start_time}")
+                    
+                    # Log before making the API call
+                    logger.debug(f"   🔄 About to call admin.generate_link API...")
+                    logger.debug(f"   📡 Network request details:")
+                    logger.debug(f"      - Target: {supabase_url}/auth/v1/admin/generate_link")
+                    logger.debug(f"      - Method: POST")
+                    logger.debug(f"      - Timeout limit: {timeout_config.read}s")
+                    
+                    # Make the API call with detailed logging
+                    api_call_start = time.time()
+                    logger.debug(f"   📤 API call initiated at: {api_call_start}")
+                    logger.info(f"   🔄 Calling Supabase admin.generate_link API...")
                     
                     link_response = admin_client.auth.admin.generate_link({
                         "type": "signup",
                         "email": email
                     })
                     
+                    api_call_end = time.time()
+                    api_call_duration = api_call_end - api_call_start
                     elapsed_time = time.time() - start_time
+                    
                     logger.info(f"✅ Verification email triggered successfully for: {email}")
-                    logger.info(f"   ⏱️  Email send completed in {elapsed_time:.2f} seconds")
+                    logger.info(f"   ⏱️  Timing Details:")
+                    logger.info(f"      - API call duration: {api_call_duration:.2f} seconds")
+                    logger.info(f"      - Total elapsed time: {elapsed_time:.2f} seconds")
+                    logger.info(f"      - Timeout limit was: {timeout_config.read}s")
+                    logger.info(f"      - Time remaining before timeout: {max(0, timeout_config.read - api_call_duration):.2f}s")
                     logger.info(f"   📧 EMAIL VERIFICATION STATUS: EMAIL SENT")
                     logger.info(f"   📧 User should check their email inbox for verification link")
+                    
+                    # Log response details if available
+                    if hasattr(link_response, 'properties') or hasattr(link_response, 'action_link'):
+                        logger.debug(f"   📋 Response received from Supabase")
+                        if hasattr(link_response, 'properties'):
+                            logger.debug(f"      - Response has properties: {type(link_response.properties)}")
+                        if hasattr(link_response, 'action_link'):
+                            action_link = str(link_response.action_link)
+                            logger.debug(f"      - Action link generated: {action_link[:50]}..." if len(action_link) > 50 else f"      - Action link: {action_link}")
                 except Exception as email_error:
+                    api_call_end = time.time() if 'api_call_start' in locals() else None
                     elapsed_time = time.time() - start_time if 'start_time' in locals() else None
                     error_type = type(email_error).__name__
                     error_str = str(email_error).lower()
                     
                     logger.error(f"❌ EMAIL SENDING FAILED for {email}")
                     logger.error(f"   📧 EMAIL VERIFICATION STATUS: EMAIL SENDING FAILED")
+                    logger.error(f"   ⏱️  Timing Information:")
+                    if elapsed_time:
+                        logger.error(f"      - Total time elapsed: {elapsed_time:.2f} seconds")
+                        logger.error(f"      - Timeout limit was: {timeout_config.read}s")
+                        timeout_percentage = (elapsed_time / timeout_config.read * 100) if timeout_config.read > 0 else 0
+                        logger.error(f"      - Timeout occurred at: {elapsed_time:.2f}s / {timeout_config.read}s ({timeout_percentage:.1f}% of timeout limit)")
+                    if api_call_end and 'api_call_start' in locals():
+                        api_call_duration = api_call_end - api_call_start
+                        logger.error(f"      - API call duration before failure: {api_call_duration:.2f} seconds")
                     logger.error(f"   🔍 Error Details:")
                     logger.error(f"      - Error Type: {error_type}")
                     logger.error(f"      - Error Message: {str(email_error)}")
-                    if elapsed_time:
-                        logger.error(f"      - Time Elapsed: {elapsed_time:.2f} seconds")
+                    logger.error(f"      - Error Module: {email_error.__class__.__module__ if hasattr(email_error, '__class__') else 'N/A'}")
                     
-                    # Check for timeout-related errors
+                    # Detailed timeout analysis
                     is_timeout = False
                     timeout_details = []
                     
@@ -474,46 +525,98 @@ class SupabaseService:
                         timeout_details.append("⚠️  TIMEOUT DETECTED")
                         logger.error(f"   ⚠️  TIMEOUT ERROR DETECTED")
                         logger.error(f"      - This indicates the SMTP server or Supabase email service is taking too long to respond")
+                        if elapsed_time:
+                            logger.error(f"      - Timeout occurred after: {elapsed_time:.2f}s (limit: {timeout_config.read}s)")
+                            
+                            # Analyze which phase timed out
+                            if elapsed_time < timeout_config.connect:
+                                logger.error(f"      - ⚠️  TIMEOUT PHASE: Connection establishment")
+                                logger.error(f"      - Connection timeout limit: {timeout_config.connect}s")
+                                logger.error(f"      - Failed during: Initial TCP connection to Supabase")
+                            elif elapsed_time < timeout_config.connect + 2:
+                                logger.error(f"      - ⚠️  TIMEOUT PHASE: Initial handshake")
+                                logger.error(f"      - Failed during: SSL/TLS handshake or initial API handshake")
+                            else:
+                                logger.error(f"      - ⚠️  TIMEOUT PHASE: Data transfer / SMTP communication")
+                                logger.error(f"      - Read timeout limit: {timeout_config.read}s")
+                                logger.error(f"      - Failed during: Waiting for Supabase to communicate with SMTP server")
+                                logger.error(f"      - This suggests Supabase is waiting for your SMTP server to respond")
                     
                     if "read operation timed out" in error_str or "read timeout" in error_str:
                         is_timeout = True
                         timeout_details.append("Read timeout - SMTP server response too slow")
                         logger.error(f"      - Read Timeout: The SMTP server did not respond in time")
+                        logger.error(f"      - Read timeout limit: {timeout_config.read}s")
+                        if elapsed_time:
+                            logger.error(f"      - Time elapsed: {elapsed_time:.2f}s")
                         logger.error(f"      - Possible causes:")
                         logger.error(f"         * SMTP server is slow or overloaded")
                         logger.error(f"         * Network latency issues")
                         logger.error(f"         * Custom SMTP configuration issues")
+                        logger.error(f"         * Supabase is waiting for SMTP server response")
+                        logger.error(f"      - 🔍 DIAGNOSIS: Supabase received the request but SMTP server took too long")
                     
                     if "connect timeout" in error_str or "connection timeout" in error_str:
                         is_timeout = True
                         timeout_details.append("Connection timeout - Cannot connect to SMTP server")
                         logger.error(f"      - Connection Timeout: Cannot establish connection to SMTP server")
+                        logger.error(f"      - Connection timeout limit: {timeout_config.connect}s")
+                        if elapsed_time:
+                            logger.error(f"      - Time elapsed: {elapsed_time:.2f}s")
                         logger.error(f"      - Possible causes:")
                         logger.error(f"         * SMTP server host/port incorrect")
                         logger.error(f"         * Firewall blocking connection")
                         logger.error(f"         * SMTP server is down")
+                        logger.error(f"         * Network routing issues")
+                        logger.error(f"      - 🔍 DIAGNOSIS: Cannot establish connection to SMTP server")
                     
                     if "write timeout" in error_str:
                         is_timeout = True
                         timeout_details.append("Write timeout - SMTP server not accepting data")
                         logger.error(f"      - Write Timeout: SMTP server not accepting data fast enough")
+                        logger.error(f"      - Write timeout limit: {timeout_config.write}s")
+                        logger.error(f"      - 🔍 DIAGNOSIS: SMTP server not accepting data")
+                    
+                    # Network-level error detection
+                    if "connection" in error_str and ("refused" in error_str or "reset" in error_str):
+                        logger.error(f"   🌐 NETWORK ERROR DETECTED:")
+                        logger.error(f"      - Connection was refused or reset")
+                        logger.error(f"      - This suggests network/firewall issues")
+                        logger.error(f"      - Check if Supabase can reach your SMTP server")
                     
                     # Log full exception details
                     logger.error(f"   📋 Full Exception Details:")
                     logger.error(f"      - Exception Type: {error_type}")
+                    logger.error(f"      - Exception Module: {email_error.__class__.__module__}")
                     logger.error(f"      - Exception Args: {email_error.args if hasattr(email_error, 'args') else 'N/A'}")
                     if hasattr(email_error, '__cause__') and email_error.__cause__:
                         logger.error(f"      - Caused by: {type(email_error.__cause__).__name__}: {str(email_error.__cause__)}")
+                        logger.error(f"      - Cause Module: {email_error.__cause__.__class__.__module__}")
                     if hasattr(email_error, '__context__') and email_error.__context__:
                         logger.error(f"      - Context: {type(email_error.__context__).__name__}: {str(email_error.__context__)}")
                     
-                    # Log full traceback
+                    # Log full traceback with line numbers
                     import traceback
-                    logger.error(f"   📋 Full Traceback:")
-                    for line in traceback.format_exception(type(email_error), email_error, email_error.__traceback__):
-                        for traceback_line in line.strip().split('\n'):
-                            if traceback_line.strip():
-                                logger.error(f"      {traceback_line}")
+                    logger.error(f"   📋 Full Traceback (with line numbers):")
+                    tb_lines = traceback.format_exception(type(email_error), email_error, email_error.__traceback__)
+                    for tb_line in tb_lines:
+                        for line in tb_line.strip().split('\n'):
+                            if line.strip():
+                                logger.error(f"      {line}")
+                    
+                    # Log the exact point of failure
+                    if email_error.__traceback__:
+                        tb = email_error.__traceback__
+                        logger.error(f"   🔍 Failure Point Analysis:")
+                        frame_count = 0
+                        while tb:
+                            frame = tb.tb_frame
+                            logger.error(f"      Frame {frame_count}: {frame.f_code.co_filename}:{tb.tb_lineno} in {frame.f_code.co_name}")
+                            tb = tb.tb_next
+                            frame_count += 1
+                            if frame_count > 10:  # Limit to prevent too much output
+                                logger.error(f"      ... (more frames)")
+                                break
                     
                     # Provide troubleshooting guidance
                     logger.error(f"   🔧 Troubleshooting Steps:")
@@ -529,10 +632,15 @@ class SupabaseService:
                     
                     if is_timeout:
                         logger.error(f"   ⏱️  TIMEOUT-SPECIFIC TROUBLESHOOTING:")
-                        logger.error(f"      - Increase SMTP timeout settings in Supabase (if available)")
+                        logger.error(f"      - Current timeout: {timeout_config.read}s")
+                        if elapsed_time:
+                            logger.error(f"      - Time elapsed before timeout: {elapsed_time:.2f}s")
+                        logger.error(f"      - Recommendation: Check Supabase SMTP timeout settings (may need to increase)")
                         logger.error(f"      - Check SMTP server response times")
                         logger.error(f"      - Consider using a different SMTP provider if current one is consistently slow")
                         logger.error(f"      - Verify network connectivity to SMTP server")
+                        logger.error(f"      - Check if SMTP server is experiencing high load")
+                        logger.error(f"      - Verify SMTP server logs for connection attempts")
                     
                     logger.warning(f"   ⚠️  User was created successfully, but verification email sending failed")
                     logger.info(f"   📧 User can request email resend from Supabase dashboard if needed")
@@ -550,6 +658,13 @@ class SupabaseService:
                     logger.info(f"   📧 EMAIL VERIFICATION STATUS: PENDING")
                 
                 # Return response with user but no session (user needs to verify email first)
+                total_signup_time = time.time() - signup_start_time
+                logger.info(f"✅ Signup process completed successfully for: {email}")
+                logger.info(f"   ⏱️  Total signup time: {total_signup_time:.2f} seconds")
+                logger.info(f"   📋 Summary:")
+                logger.info(f"      - User creation: ✅ Success")
+                logger.info(f"      - Email sending: {'✅ Success' if 'link_response' in locals() else '⚠️  Failed (check logs above)'}")
+                
                 class SignUpResponse:
                     def __init__(self, user):
                         self.user = user
