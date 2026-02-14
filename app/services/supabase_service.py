@@ -372,8 +372,23 @@ class SupabaseService:
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
+            # Configure client options with increased timeout for signup
+            # Signup with email verification can take longer due to SMTP operations
+            timeout_config = Timeout(
+                connect=10.0,  # 10 seconds to establish connection
+                read=90.0,     # 90 seconds to read response (increased for SMTP email sending)
+                write=10.0,    # 10 seconds to write request
+                pool=5.0       # 5 seconds to get connection from pool
+            )
+            
+            client_options = ClientOptions(
+                postgrest_client_timeout=timeout_config,
+                storage_client_timeout=timeout_config,
+                headers={}
+            )
+            
             logger.info("🔧 Creating Supabase anon client for signup (sends verification emails automatically)...")
-            anon_client = create_client(supabase_url, supabase_anon_key)
+            anon_client = create_client(supabase_url, supabase_anon_key, options=client_options)
             
             # Determine if email is from Kuwait University
             is_ku_email = email.endswith("@grad.ku.edu.kw") if email else False
