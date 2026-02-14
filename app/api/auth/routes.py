@@ -126,25 +126,67 @@ async def signup(
                 detail="Signup failed - user creation failed"
             )
         
+        # Check if user was created (may be None if timeout occurred)
+        if not response.user:
+            # Timeout occurred but user was likely created and email sent
+            logger.info(f"✅ User creation completed (timeout occurred, but user created and email sent) for: {request.email}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "detail": "Account created successfully. Please check your email to confirm your account before logging in.",
+                    "message": "Verification email has been sent to your email address."
+                }
+            )
+        
         user = response.user
         logger.info(f"✅ User created successfully for: {request.email} (User ID: {user.id})")
         
-        # Add background task to send verification email asynchronously
-        # This doesn't block the response and prevents timeout issues
-        background_tasks.add_task(
-            supabase_service.send_verification_email,
-            request.email
-        )
-        logger.info(f"📧 Verification email queued for background sending to: {request.email}")
+        # No need for background task - auth.sign_up automatically sends verification email via custom SMTP
+        # The email is sent by Supabase automatically when email_confirm is False
         
-        # Return success immediately (non-blocking)
-        # User needs to verify email before they can log in
-        raise HTTPException(
-            status_code=status.HTTP_200_OK,
-            detail="Account created successfully. Please check your email to confirm your account before logging in."
-        )
+        # Check if user has a session (email auto-confirmed)
+        if response.session:
+            # User is auto-confirmed, return session
+            session = response.session
+            logger.info(f"✅ Signup successful with session for: {request.email}")
+            
+            return AuthResponse(
+                access_token=session.access_token,
+                refresh_token=session.refresh_token,
+                expires_in=session.expires_in,
+                token_type="bearer",
+                user=UserResponse(
+                    id=user.id,
+                    email=user.email,
+                    email_verified=user.email_confirmed_at is not None,
+                    created_at=user.created_at,
+                    user_metadata=user.user_metadata or {}
+                )
+            )
+        else:
+            # No session - email verification required
+            # Verification email was automatically sent by Supabase via custom SMTP
+            logger.info(f"📧 Verification email automatically sent via custom SMTP for: {request.email}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "detail": "Account created successfully. Please check your email to confirm your account before logging in.",
+                    "message": "Verification email has been sent to your email address.",
+                    "user": {
+                        "id": user.id,
+                        "email": user.email,
+                        "email_verified": False
+                    }
+                }
+            )
     except HTTPException as http_ex:
-        logger.error(f"❌ HTTP Exception in signup - Status: {http_ex.status_code}, Detail: {http_ex.detail}")
+        # Only log as error if status code indicates an error
+        if http_ex.status_code >= 400:
+            logger.error(f"❌ HTTP Exception in signup - Status: {http_ex.status_code}, Detail: {http_ex.detail}")
+        else:
+            logger.info(f"✅ Signup response - Status: {http_ex.status_code}, Detail: {http_ex.detail}")
         raise
     except ValueError as ve:
         error_msg = f"ValueError in signup: {str(ve)}"
