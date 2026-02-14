@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from app.models.auth import LoginRequest, SignupRequest, UserResponse, TokenResponse, VerifyTokenRequest, RefreshTokenRequest, AuthResponse, UpdateProfileRequest, UpdatePasswordRequest
 from app.services.supabase_service import SupabaseService
 from app.api.auth.dependencies import get_current_user
@@ -87,10 +87,11 @@ async def login(
 @router.post("/signup", response_model=AuthResponse)
 async def signup(
     request: SignupRequest,
+    background_tasks: BackgroundTasks,
     supabase_service: SupabaseService = Depends(lambda: SupabaseService())
 ):
     """
-    Sign up new user
+    Sign up new user - non-blocking (returns immediately, sends email asynchronously)
     """
     logger.info(f"📥 Signup request received for email: {request.email}")
     logger.debug(f"   Request details - Email: {request.email}, Password length: {len(request.password) if request.password else 0}")
@@ -107,52 +108,40 @@ async def signup(
         if request.date_of_birth:
             user_metadata["date_of_birth"] = request.date_of_birth
         
+        # Create user quickly using admin API (non-blocking)
         response = supabase_service.sign_up(
             request.email, 
             request.password, 
             user_metadata
         )
         logger.debug(f"   Step 1 completed - Response received: {type(response)}")
-        logger.debug(f"   Response has session: {hasattr(response, 'session')}")
         logger.debug(f"   Response has user: {hasattr(response, 'user')}")
         
-        if not response.session:
-            # Check if user was created but email confirmation is required
-            if hasattr(response, 'user') and response.user:
-                logger.info(f"📧 User created but email confirmation required: {request.email}")
-                logger.debug(f"   User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
-                raise HTTPException(
-                    status_code=status.HTTP_200_OK,
-                    detail="Account created successfully. Please check your email to confirm your account before logging in."
-                )
-            
-            error_msg = "Signup failed - no session created and no user returned"
+        # Check if user was created
+        if not hasattr(response, 'user') or not response.user:
+            error_msg = "Signup failed - no user object returned"
             logger.warning(f"⚠️  {error_msg} for: {request.email}")
-            logger.debug(f"   Full response object: {response}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Signup failed - no session created"
+                detail="Signup failed - user creation failed"
             )
         
-        logger.info(f"📝 Step 2: Extracting session data")
-        session = response.session
-        user = session.user
-        logger.debug(f"   Session extracted - User ID: {user.id}, Email: {user.email}")
+        user = response.user
+        logger.info(f"✅ User created successfully for: {request.email} (User ID: {user.id})")
         
-        logger.info(f"✅ Signup successful for: {request.email} (User ID: {user.id})")
+        # Add background task to send verification email asynchronously
+        # This doesn't block the response and prevents timeout issues
+        background_tasks.add_task(
+            supabase_service.send_verification_email,
+            request.email
+        )
+        logger.info(f"📧 Verification email queued for background sending to: {request.email}")
         
-        return AuthResponse(
-            access_token=session.access_token,
-            refresh_token=session.refresh_token,
-            expires_in=session.expires_in,
-            token_type="bearer",
-            user=UserResponse(
-                id=user.id,
-                email=user.email,
-                email_verified=user.email_confirmed_at is not None,
-                created_at=user.created_at,
-                user_metadata=user.user_metadata or {}
-            )
+        # Return success immediately (non-blocking)
+        # User needs to verify email before they can log in
+        raise HTTPException(
+            status_code=status.HTTP_200_OK,
+            detail="Account created successfully. Please check your email to confirm your account before logging in."
         )
     except HTTPException as http_ex:
         logger.error(f"❌ HTTP Exception in signup - Status: {http_ex.status_code}, Detail: {http_ex.detail}")
