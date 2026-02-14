@@ -37,9 +37,11 @@ class SupabaseService:
                 raise ValueError(error_msg)
             
             try:
-                # Create client with service role key
+                # Create client with service role key and api schema
                 # The service role key bypasses RLS and never expires
-                self._client = create_client(supabase_url, supabase_key)
+                # All tables are in the 'api' schema
+                client_options = ClientOptions(schema="api")
+                self._client = create_client(supabase_url, supabase_key, options=client_options)
                 
                 # Verify we're using service role key (not anon key)
                 # Service role keys are longer and start with 'eyJ' (JWT format)

@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Tuple
 from datetime import date, datetime, timedelta
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 from app.models.subscription import PlanType, PlanDetails, UserUsageResponse, UserPlanResponse
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,10 @@ class PlanService:
                 logger.error(f"❌ {error_msg}")
                 raise ValueError(error_msg)
             
-            self._supabase_client = create_client(supabase_url, supabase_service_key)
-            logger.info("✅ Supabase service client created for PlanService")
+            # Configure client to use api schema (all tables are in api schema)
+            client_options = ClientOptions(schema="api")
+            self._supabase_client = create_client(supabase_url, supabase_service_key, options=client_options)
+            logger.info("✅ Supabase service client created for PlanService (api schema)")
         
         return self._supabase_client
     

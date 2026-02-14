@@ -10,6 +10,7 @@ Usage:
 import os
 import sys
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -24,7 +25,9 @@ def migrate_course_files():
         print("❌ SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
         sys.exit(1)
     
-    client = create_client(supabase_url, supabase_service_key)
+    # Configure client to use api schema (all tables are in api schema)
+    client_options = ClientOptions(schema="api")
+    client = create_client(supabase_url, supabase_service_key, options=client_options)
     
     print("🔄 Starting migration of course files...")
     

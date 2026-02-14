@@ -1,6 +1,7 @@
 import logging
 from typing import List, Optional
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 import os
 from app.models.course import CourseResponse, StudentCourseResponse
 
@@ -14,8 +15,10 @@ class CourseService:
         if not supabase_url or not supabase_service_key:
             raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
         
-        self.supabase = create_client(supabase_url, supabase_service_key)
-        logger.info("✅ CourseService initialized")
+        # Configure client to use api schema (all tables are in api schema)
+        client_options = ClientOptions(schema="api")
+        self.supabase = create_client(supabase_url, supabase_service_key, options=client_options)
+        logger.info("✅ CourseService initialized (api schema)")
     
     def create_course(self, code: str, name: str, description: Optional[str], created_by: str) -> dict:
         """Create a new course (admin only)"""

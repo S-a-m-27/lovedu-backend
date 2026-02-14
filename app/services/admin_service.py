@@ -5,6 +5,7 @@ from urllib.parse import quote, unquote
 from typing import Optional, List
 from datetime import datetime
 from supabase import create_client
+from supabase.lib.client_options import ClientOptions
 from app.models.admin import FileUploadResponse
 from app.models.chat import AssistantType
 
@@ -20,7 +21,7 @@ class AdminService:
         return cls._instance
     
     def _get_supabase_client(self):
-        """Get Supabase service role client"""
+        """Get Supabase service role client with api schema"""
         if self._supabase_client is None:
             supabase_url = os.getenv("SUPABASE_URL")
             supabase_service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -28,8 +29,10 @@ class AdminService:
             if not supabase_url or not supabase_service_key:
                 raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
             
-            self._supabase_client = create_client(supabase_url, supabase_service_key)
-            logger.info("✅ Supabase service client created for AdminService")
+            # Configure client to use api schema (all tables are in api schema)
+            client_options = ClientOptions(schema="api")
+            self._supabase_client = create_client(supabase_url, supabase_service_key, options=client_options)
+            logger.info("✅ Supabase service client created for AdminService (api schema)")
         
         return self._supabase_client
     
