@@ -9,6 +9,26 @@ logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
+def is_valid_jwt_format(token: str) -> bool:
+    """
+    Validate JWT token format before attempting verification.
+    JWT tokens must have exactly 3 parts separated by dots.
+    """
+    if not token or not isinstance(token, str):
+        return False
+    
+    # Check for common invalid values
+    if token in ('null', 'undefined', 'None', '') or token.strip() == '':
+        return False
+    
+    # JWT should have exactly 3 parts separated by dots: header.payload.signature
+    parts = token.split('.')
+    if len(parts) != 3:
+        return False
+    
+    # Each part should be non-empty
+    return all(part and len(part) > 0 for part in parts)
+
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> UserResponse:
@@ -19,6 +39,16 @@ async def get_current_user(
     token = credentials.credentials
     token_preview = token[:20] + "..." if len(token) > 20 else token
     logger.debug(f"Token preview: {token_preview}")
+    
+    # Validate token format before attempting verification
+    if not is_valid_jwt_format(token):
+        logger.warning(f"⚠️  Invalid JWT token format detected: {token_preview}")
+        logger.debug(f"   Token length: {len(token)}, Parts: {len(token.split('.'))}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token format. Please sign in again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     
     supabase_service = SupabaseService()
     
