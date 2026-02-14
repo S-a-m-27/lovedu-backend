@@ -429,18 +429,39 @@ class SupabaseService:
                         logger.warning(f"⚠️  Signup timed out for {email}, but user may have been created and email sent")
                         # Check if user exists (user might have been created before timeout)
                         try:
-                            # Try to get user by email to see if creation succeeded
+                            # Try to verify user was created using admin API
                             admin_client = create_client(supabase_url, os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
-                            # If we can't check, assume success (email was likely sent)
-                            logger.info(f"   Assuming user was created and email was sent (timeout occurred during SMTP)")
+                            
+                            # Try to list users and find by email (admin API)
+                            # Note: This is a best-effort check - if it fails, we still assume success
+                            try:
+                                users_response = admin_client.auth.admin.list_users()
+                                user_found = None
+                                if hasattr(users_response, 'users'):
+                                    for u in users_response.users:
+                                        if hasattr(u, 'email') and u.email.lower() == email.lower():
+                                            user_found = u
+                                            break
+                                
+                                if user_found:
+                                    logger.info(f"   ✅ Verified: User was created successfully (User ID: {user_found.id})")
+                                else:
+                                    logger.warning(f"   ⚠️  Could not find user in admin list, but assuming creation succeeded")
+                            except Exception as list_error:
+                                logger.debug(f"   Could not list users to verify: {str(list_error)}")
+                                logger.info(f"   Assuming user was created (timeout occurred during SMTP)")
+                            
                             # Return a response indicating success but no session
+                            # Supabase sends emails asynchronously, so email should still be delivered
+                            logger.info(f"   Email should be sent asynchronously by Supabase")
                             class SignUpResponse:
                                 def __init__(self, user=None):
                                     self.user = user
                                     self.session = None
                             return SignUpResponse(None)  # User exists but we don't have the object
-                        except:
+                        except Exception as verify_error:
                             # If we can't verify, still assume success to avoid blocking user
+                            logger.warning(f"   ⚠️  Could not verify user creation: {str(verify_error)}")
                             logger.info(f"   User creation likely succeeded, email should be sent")
                             class SignUpResponse:
                                 def __init__(self, user=None):

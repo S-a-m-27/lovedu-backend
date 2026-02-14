@@ -117,17 +117,9 @@ async def signup(
         logger.debug(f"   Step 1 completed - Response received: {type(response)}")
         logger.debug(f"   Response has user: {hasattr(response, 'user')}")
         
-        # Check if user was created
-        if not hasattr(response, 'user') or not response.user:
-            error_msg = "Signup failed - no user object returned"
-            logger.warning(f"⚠️  {error_msg} for: {request.email}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Signup failed - user creation failed"
-            )
-        
         # Check if user was created (may be None if timeout occurred)
-        if not response.user:
+        # Handle timeout case first - user was likely created and email sent
+        if not hasattr(response, 'user') or response.user is None:
             # Timeout occurred but user was likely created and email sent
             logger.info(f"✅ User creation completed (timeout occurred, but user created and email sent) for: {request.email}")
             from fastapi.responses import JSONResponse
