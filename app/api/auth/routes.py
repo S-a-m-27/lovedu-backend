@@ -122,6 +122,7 @@ async def signup(
         if not hasattr(response, 'user') or response.user is None:
             # Timeout occurred but user was likely created and email sent
             logger.info(f"✅ User creation completed (timeout occurred, but user created and email sent) for: {request.email}")
+            logger.info(f"📧 EMAIL VERIFICATION: Status unknown due to timeout - check Supabase Auth logs")
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
@@ -159,7 +160,13 @@ async def signup(
         else:
             # No session - email verification required
             # Verification email was automatically sent by Supabase via custom SMTP
-            logger.info(f"📧 Verification email automatically sent via custom SMTP for: {request.email}")
+            email_verified = user.email_confirmed_at is not None if hasattr(user, 'email_confirmed_at') else False
+            if not email_verified:
+                logger.info(f"📧 EMAIL VERIFICATION STATUS: PENDING for {request.email}")
+                logger.info(f"📧 Verification email should have been automatically sent via custom SMTP")
+                logger.info(f"📧 If email not received, check Supabase Dashboard > Logs > Auth Logs")
+            else:
+                logger.info(f"✅ EMAIL VERIFICATION STATUS: CONFIRMED for {request.email}")
             from fastapi.responses import JSONResponse
             return JSONResponse(
                 status_code=status.HTTP_200_OK,

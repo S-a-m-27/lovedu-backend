@@ -407,18 +407,22 @@ class SupabaseService:
             logger.debug(f"User metadata included - Plan: free, Is KU Member: {is_ku_email}, Additional: {user_metadata}")
             
             logger.info(f"📤 Creating user via auth.sign_up (automatically sends verification email via custom SMTP) for: {email}")
+            logger.info(f"   📧 Email verification will be sent automatically by Supabase via custom SMTP")
             
             # Use regular auth.sign_up - this automatically sends verification emails via custom SMTP
             # Wrap in timeout to handle slow SMTP servers gracefully
             try:
                 def signup_with_timeout():
-                    return anon_client.auth.sign_up({
+                    logger.debug(f"   🔄 Calling Supabase auth.sign_up API for: {email}")
+                    result = anon_client.auth.sign_up({
                         "email": email,
                         "password": password,
                         "options": {
                             "data": metadata
                         }
                     })
+                    logger.debug(f"   ✅ Supabase auth.sign_up API call completed for: {email}")
+                    return result
                 
                 # Execute with timeout using thread pool
                 with ThreadPoolExecutor(max_workers=1) as executor:
@@ -453,7 +457,9 @@ class SupabaseService:
                             
                             # Return a response indicating success but no session
                             # Supabase sends emails asynchronously, so email should still be delivered
-                            logger.info(f"   Email should be sent asynchronously by Supabase")
+                            logger.info(f"   📧 Email should be sent asynchronously by Supabase")
+                            logger.info(f"   📧 EMAIL VERIFICATION STATUS: PENDING (timeout occurred, cannot verify)")
+                            logger.info(f"   📧 Check Supabase Dashboard > Logs > Auth Logs to verify email was sent")
                             class SignUpResponse:
                                 def __init__(self, user=None):
                                     self.user = user
@@ -470,13 +476,19 @@ class SupabaseService:
                             return SignUpResponse(None)
                 
                 logger.debug(f"   Supabase API call completed - Response type: {type(response)}")
+                
+                # Log response details for debugging
+                if hasattr(response, 'user') and response.user:
+                    logger.debug(f"   📋 Response details - User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
+                    logger.debug(f"   📋 Response details - Has session: {hasattr(response, 'session') and response.session is not None}")
             except Exception as supabase_error:
                 error_str = str(supabase_error).lower()
                 
                 # Check if it's a timeout - user might still have been created
                 if "timeout" in error_str or "timed out" in error_str:
                     logger.warning(f"⚠️  Signup timed out for {email}, but user may have been created and email sent")
-                    logger.info(f"   Supabase sends emails asynchronously, so email should still be delivered")
+                    logger.info(f"   📧 Supabase sends emails asynchronously, so email should still be delivered")
+                    logger.info(f"   ⚠️  NOTE: Cannot verify email sending status due to timeout - check Supabase Auth logs")
                     # Return success - user was likely created and email will be sent
                     class SignUpResponse:
                         def __init__(self, user=None):
@@ -486,6 +498,7 @@ class SupabaseService:
                 
                 logger.error(f"   ❌ Supabase API call failed: {str(supabase_error)}")
                 logger.error(f"   Error type: {type(supabase_error).__name__}")
+                logger.error(f"   📧 Email verification status: UNKNOWN (signup failed)")
                 logger.exception("   Supabase error traceback:")
                 raise
             
@@ -495,10 +508,22 @@ class SupabaseService:
             if response.user:
                 logger.info(f"✅ User created successfully for: {email}")
                 logger.debug(f"   User ID: {response.user.id if hasattr(response.user, 'id') else 'N/A'}")
-                logger.debug(f"   Email confirmed: {response.user.email_confirmed_at if hasattr(response.user, 'email_confirmed_at') else 'N/A'}")
                 
-                # Check if email is confirmed
+                # Check email confirmation status
                 email_confirmed = hasattr(response.user, 'email_confirmed_at') and response.user.email_confirmed_at is not None
+                email_confirmed_at = response.user.email_confirmed_at if hasattr(response.user, 'email_confirmed_at') else None
+                
+                if email_confirmed:
+                    logger.info(f"   ✅ Email already confirmed at: {email_confirmed_at}")
+                else:
+                    logger.info(f"   📧 Email NOT confirmed - verification email should have been sent automatically")
+                    logger.info(f"   📧 Email verification status: PENDING (user should check inbox for verification link)")
+                    logger.info(f"   📧 If email not received, check:")
+                    logger.info(f"      - Supabase Dashboard > Logs > Auth Logs for email sending errors")
+                    logger.info(f"      - Custom SMTP settings in Supabase Dashboard > Settings > Auth > SMTP Settings")
+                    logger.info(f"      - Email spam/junk folder")
+                
+                logger.debug(f"   Email confirmed timestamp: {email_confirmed_at if email_confirmed_at else 'None (verification required)'}")
                 
                 if response.session:
                     # User is auto-confirmed and has a session
@@ -531,10 +556,23 @@ class SupabaseService:
                         logger.info("   User was created but session creation failed - user can sign in manually")
                 else:
                     # Email not confirmed - verification email should have been sent automatically
-                    logger.info("📧 User created but email not confirmed - verification email sent automatically via custom SMTP")
-                    logger.info("   User should check their email inbox for verification link")
+                    logger.info("📧 User created but email not confirmed - verification email should have been sent automatically via custom SMTP")
+                    logger.info("   📧 EMAIL VERIFICATION STATUS: PENDING")
+                    logger.info("   📧 Supabase auth.sign_up should have automatically sent verification email")
+                    logger.info("   📧 User should check their email inbox (including spam folder) for verification link")
+                    logger.info("   📧 If email not received, verify:")
+                    logger.info("      - Supabase Dashboard > Settings > Auth > SMTP Settings (custom SMTP enabled)")
+                    logger.info("      - Supabase Dashboard > Authentication > Email Templates (Confirm signup template enabled)")
+                    logger.info("      - Supabase Dashboard > Logs > Auth Logs (check for email sending errors)")
                 
                 # Return response with user but no session (user needs to verify email first)
+                logger.info(f"📧 FINAL EMAIL VERIFICATION STATUS for {email}:")
+                logger.info(f"   - Email confirmed: {email_confirmed}")
+                logger.info(f"   - Verification email: Should have been sent automatically by Supabase")
+                logger.info(f"   - Next step: User should check email inbox for verification link")
+                if not email_confirmed:
+                    logger.warning(f"   ⚠️  If email not received, check Supabase Auth logs for sending errors")
+                
                 class SignUpResponse:
                     def __init__(self, user):
                         self.user = user
